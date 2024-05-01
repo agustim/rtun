@@ -1,44 +1,34 @@
-use clap::{arg, Command};
+use clap::{Parser, ValueEnum};
 
-// const PORT: &str = "1714";
 
-fn cli() -> Command {
-    Command::new("RTun")
-        .version("0.0.1")
-        .author("Agustí Moll")
-        .about("Building a simple VPN")
-        .arg_required_else_help(true)
-        .allow_external_subcommands(true)
-        .arg(arg!(-m <MODE> "Mode of the program")
-            .required(true)
-            .value_parser(["client", "server"])
-        )
-        // .subcommand(
-        //     Command::new("mode")
-        //         .about("Define the mode of the program")
-        //         .arg(arg!(<MODE> "Mode of the program")
-        //             .required(true)
-        //             .value_parser(["client", "server"])
-        //         )
-        //         .arg_required_else_help(true)
-        // )
-    }
+#[derive(Parser)]
+#[command(version = "0.0.1", about, long_about = None)]
+
+struct Cli {
+    #[arg(value_enum, short, long)]
+    mode: Mode,
+    #[arg(short, long, default_value = "1714")]
+    port: u16,
+
+}
+#[derive(Clone, ValueEnum)]
+enum Mode {
+    Server,
+    Client,
+}
+
 #[tokio::main]
 async fn main() {
 
-    let matches = cli().get_matches();
+    let cli = Cli::parse();
 
-    match matches.contains_id(MODE) {
-        Some("client") => {
-            println!("Client mode");
+    match cli.mode {
+        Mode::Server => {
+            println!("server");
         }
-        Some("server") => {
-            println!("Server mode");
-        }
-        _ => {
-            println!("No mode selected");
+        Mode::Client => {
+            println!("client");
         }
     }
-
 
 }
