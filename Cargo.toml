@@ -9,3 +9,4 @@ authors = ["Agustí Moll"]
 [dependencies]
 clap = { version = "4.5.4", features = ["derive"] }
 tokio = { version = "1.37.0", features = ["full"] }
+udp-stream = "0.0.11"
