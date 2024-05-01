@@ -1,6 +1,5 @@
 use clap::{Parser, ValueEnum};
 
-
 #[derive(Parser)]
 #[command(version = "0.0.1", about, long_about = None)]
 
@@ -9,7 +8,6 @@ struct Cli {
     mode: Mode,
     #[arg(short, long, default_value = "1714")]
     port: u16,
-
 }
 #[derive(Clone, ValueEnum)]
 enum Mode {
@@ -19,7 +17,6 @@ enum Mode {
 
 #[tokio::main]
 async fn main() {
-
     let cli = Cli::parse();
 
     match cli.mode {
@@ -30,5 +27,4 @@ async fn main() {
             println!("client");
         }
     }
-
 }

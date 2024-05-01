@@ -14,7 +14,7 @@ $ cargo init
 
 ### 2nd Step - Add libs
 ```
-$ cargo add clap
+$ cargo add clap --features derive
 ```
 
 ### 3rd Step - 
