@@ -191,12 +191,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "log"
-version = "0.4.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90ed8c1e510134f979dbc4f070f87d4313098b704861a105fe34231c70a3901c"
-
-[[package]]
 name = "memchr"
 version = "2.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -303,7 +297,6 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "tokio",
- "udp-stream",
 ]
 
 [[package]]
@@ -388,17 +381,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "udp-stream"
-version = "0.0.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3919f77f6284b720c9b775dcac42a399198a3667d893ba26700da3d1c6b85baa"
-dependencies = [
- "bytes",
- "log",
- "tokio",
 ]
 
 [[package]]

@@ -1,14 +1,12 @@
 use clap::{Parser, ValueEnum};
-use std::net::{SocketAddr, IpAddr};
-use std::str::FromStr;
+use tokio::net::UdpSocket;
+use std::net::{IpAddr, SocketAddr};
 use std::error::Error;
-use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::time::timeout;
-use udp_stream::UdpStream;
+use std::str::FromStr;
+use std::io::{stdin, Read};
+
 
 const UDP_BUFFER_SIZE: usize = 17480; // 17kb
-const UDP_TIMEOUT: u64 = 10 * 1000; // 10sec
 
 #[derive(Parser)]
 #[command(version = "0.0.1", about, long_about = None)]
@@ -29,52 +27,78 @@ enum Mode {
     Client,
 }
 
+struct Server {
+    socket: UdpSocket,
+    buf: Vec<u8>,
+    to_send: Option<(usize, SocketAddr)>,
+}
+
+impl Server {
+    async fn run(self) -> Result<(), Box<dyn Error>> {
+        let Server {
+            socket,
+            mut buf,
+            mut to_send,
+        } = self;
+
+        loop {
+            if let Some((size, peer)) = to_send {
+                let amt = socket.send_to(&buf[..size], &peer).await?;
+
+                println!("Echoed {}/{} bytes to {}", amt, size, peer);
+            }
+
+            to_send = Some(socket.recv_from(&mut buf).await?);
+        }
+    }
+}
+
 async fn server_mode(port: u16) -> Result<(), Box<dyn Error>> {
 
     let localhost_ip = IpAddr::from_str("127.0.0.1").unwrap();
     let server = SocketAddr::new(localhost_ip, port);
-    let listener = udp_stream::UdpListener::bind(server).await?;
-    loop {
-        let (mut stream, _) = listener.accept().await?;
-        println!("Connected to {}", &stream.peer_addr()?);
-        tokio::spawn(async move {
-            let id = std::thread::current().id();
-            let block = async move {
-                let mut buf = vec![0u8; UDP_BUFFER_SIZE];
-                let duration = Duration::from_millis(UDP_TIMEOUT);
-                loop {
-                    let n = timeout(duration, stream.read(&mut buf)).await??;
-                    stream.write_all(&buf[0..n]).await?;
-                    println!("{:?} echoed {:?} for {} bytes", id, stream.peer_addr(), n);
-                }
-                #[allow(unreachable_code)]
-                Ok::<(), std::io::Error>(())
-            };
-            if let Err(e) = block.await {
-                println!("error: {:?}", e);
-            }
-        });
-        println!("out of spawn");
-    }
+    let socket = UdpSocket::bind(server).await?;
 
+    let server = Server {
+        socket,
+        buf: vec![0; UDP_BUFFER_SIZE],
+        to_send: None,
+    };
+        server.run().await?;
+
+    Ok(())
+    
+}
+fn get_stdin_data() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let mut buf = Vec::new();
+    stdin().read_to_end(&mut buf)?;
+    Ok(buf)
 }
 
 async fn client_mode(server_ip: &str, port: u16) -> Result<(), Box<dyn Error>> {
 
-    let ip_server = IpAddr::from_str(server_ip).unwrap();
-    let server = SocketAddr::new(ip_server, port);
-    let mut stream = UdpStream::connect(server).await?;
+    let remote_addr = IpAddr::from_str(server_ip).unwrap();
+    let remote_server = SocketAddr::new(remote_addr, port);
 
-    println!("Ready to Connected to {}", &stream.peer_addr()?);
-    let mut buffer = String::new();
-    loop {
-        std::io::stdin().read_line(&mut buffer).unwrap();
-        stream.write_all(buffer.as_bytes()).await?;
-        let mut buf = vec![0u8; 1024];
-        let n = stream.read(&mut buf).await?;
-        print!("-> {}", String::from_utf8_lossy(&buf[..n]));
-        buffer.clear();
+    let local_addr: SocketAddr = if remote_addr.is_ipv4() {
+        "0.0.0.0:0"
+    } else {
+        "[::]:0"
     }
+    .parse()?;
+
+    let socket = UdpSocket::bind(local_addr).await?;
+    const MAX_DATAGRAM_SIZE: usize = 65_507;
+    socket.connect(remote_server).await?;
+    let data = get_stdin_data()?;
+    println!("Sending data:\n{}", String::from_utf8_lossy(&data));
+    socket.send(&data).await?;
+    let mut data = vec![0u8; MAX_DATAGRAM_SIZE];
+    let len = socket.recv(&mut data).await?;
+    println!("Received {} bytes:\n{}",len,String::from_utf8_lossy(&data[..len]));
+
+    Ok(())
+
 }
 
 #[tokio::main]
