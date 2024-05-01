@@ -2,6 +2,7 @@
 
 Generate a VPN in rust 
 
+disclaimer: this is my first rust program, feel free to send pull request.  
 
 ## Devel
 
