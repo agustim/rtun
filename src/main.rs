@@ -69,7 +69,11 @@ async fn receive_from_tun_and_send_to_socket(
     loop {
         let size = tun.recv(&mut buf).await?;
         debug!("t2s: Received {}/{} bytes from tun sent to: {}", size, UDP_BUFFER_SIZE, peer);
-        let _ = socket.send(&buf[..size]).await?;
+        debug!("t2s: Peer: {:?} {:?}", socket, peer);
+        debug!("t2s; buffer: {:?}", &buf[..size]);
+        debug!("t2s: tun: {:?}", tun.netmask());
+        //let _ = socket.send_to(&buf[..size], target);
+         debug!("t2s: Sent to socket");
     }
 
 }
@@ -85,7 +89,9 @@ async fn receive_from_socket_and_send_to_tun(
         let (size, peer) = socket.recv_from(&mut buf).await?;
         debug!("s2t: Received {}/{} bytes from {}", size, UDP_BUFFER_SIZE, peer);
         tun.send(&buf[..size]).await?;
+        debug!("s2t: Sent to tun");
     }
+
 
 }
 
