@@ -1,13 +1,15 @@
 use clap::{Parser, ValueEnum};
+use env_logger::Builder;
+use ipnet::Ipv4Net;
+use log::{debug, error, info, LevelFilter};
 use std::error::Error;
+use std::net::Ipv4Addr;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
+use std::sync::Arc;
 use tokio::net::UdpSocket;
-use env_logger::Builder;
-use log::{debug, error, info, LevelFilter};
-use ipnet::Ipv4Net;
-use std::net::Ipv4Addr;
 use tokio_tun::Tun;
+use tokio::signal;
 
 const UDP_BUFFER_SIZE: usize = 17480; // 17kb
 
@@ -53,10 +55,38 @@ async fn create_tun(ipv4: &str, mtu: i32) -> tokio_tun::Tun {
 struct Node {
     socket: UdpSocket,
     tun: tokio_tun::Tun,
-    buf: Vec<u8>,
-    peer: SocketAddr,  // Així no podem tenir més d'un client, s'hauria de canviar per un HashMap
-    to_send_tun: Option<(usize, SocketAddr)>,
-    recv_from_tun: Option<usize>
+    peer: SocketAddr, // Així no podem tenir més d'un client, s'hauria de canviar per un HashMap
+}
+
+async fn receive_from_tun_and_send_to_socket(
+    socket: Arc<UdpSocket>,
+    tun: Arc<tokio_tun::Tun>,
+    peer: Arc<SocketAddr>,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+
+
+    let mut buf = [0u8; UDP_BUFFER_SIZE];
+    loop {
+        let size = tun.recv(&mut buf).await?;
+        debug!("t2s: Received {}/{} bytes from tun sent to: {}", size, UDP_BUFFER_SIZE, peer);
+        let _ = socket.send(&buf[..size]).await?;
+    }
+
+}
+
+async fn receive_from_socket_and_send_to_tun(
+    socket: Arc<UdpSocket>,
+    tun: Arc<tokio_tun::Tun>,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+
+
+    let mut buf = [0u8; UDP_BUFFER_SIZE];
+    loop {
+        let (size, peer) = socket.recv_from(&mut buf).await?;
+        debug!("s2t: Received {}/{} bytes from {}", size, UDP_BUFFER_SIZE, peer);
+        tun.send(&buf[..size]).await?;
+    }
+
 }
 
 impl Node {
@@ -64,32 +94,73 @@ impl Node {
         let Node {
             socket,
             tun,
-            mut peer,
-            mut buf,
-            mut to_send_tun,
-            mut recv_from_tun,
+            peer,
         } = self;
 
-        loop {
-            if let Some((size, peer_connect)) = to_send_tun {
+        debug!("Node started");
 
-                debug!("Received {}/{} bytes from {}", size, UDP_BUFFER_SIZE, peer_connect);
-                peer = peer_connect;
-                tun.send(&buf[..size]).await?;
+        // Clone udp socket
+        let socket_arc = Arc::new(socket);
+        let socket_clone = socket_arc.clone();
+        // Clone tun
+        let tun_arc = Arc::new(tun);
+        let tun_clone = tun_arc.clone();
+        // Clone peer
+        let peer_arc = Arc::new(peer);
+        
+
+        tokio::select!{ 
+
+            res = tokio::spawn(async move {
+                // receive from tun and send to socket
+                let _ = receive_from_tun_and_send_to_socket(socket_arc, tun_arc, peer_arc ).await;
+            }) => { res.map_err(|e| e.into()) },
+
+            res = tokio::spawn(async move {
+                // receive from socket and send to tun
+                let _ = receive_from_socket_and_send_to_tun(socket_clone, tun_clone).await;
+            }) => { res.map_err(|e| e.into()) },
+
+            res = signal::ctrl_c() => {
+                res.map_err(|e| e.into())
             }
-            
-            if let Some(size) = recv_from_tun {
-                debug!("Received {}/{} bytes ", size, UDP_BUFFER_SIZE);
-                
-                let _ = socket.send_to(&buf[..size], &peer).await?;
-
-            }
-
-            to_send_tun = Some(socket.recv_from(&mut buf).await?);
-
-            recv_from_tun = Some(tun.recv(&mut buf).await.unwrap());
-
         }
+
+            
+        // tokio::spawn(async move {
+        //     let mut buf = [0u8; UDP_BUFFER_SIZE];
+        //     debug!("in spawn tun");
+        //     debug!("Before Peer: {:?}", peer);
+        //     loop {
+
+        //         if let Some(size) = recv_from_tun {
+        //             debug!("Received {}/{} bytes {:?}", size, UDP_BUFFER_SIZE, buf[..size].to_vec() );
+
+        //             debug!("Peer: {:?}", peer);
+        //             if peer.ip().is_unspecified() || peer.port() == 0 {
+        //                 debug!("Peer not set, skipping packet");
+        //             } else {
+        //                 let _ = socket_clone.send_to(&buf[..size], &peer).await.unwrap();
+        //             }
+        //         }
+        //         recv_from_tun = Some(tun_clone.recv(&mut buf).await.unwrap());
+        //     }
+        // });
+
+        // let mut buf = [0u8; UDP_BUFFER_SIZE];
+        // loop {
+        //     debug!("Looping");
+
+        //     if let Some((size, peer_connect)) = to_send_tun {
+        //         debug!(
+        //             "Received {}/{} bytes from {}",
+        //             size, UDP_BUFFER_SIZE, peer_connect
+        //         );
+        //         //peer = peer_connect;
+        //         tun_arc.send(&buf[..size]).await.unwrap();
+        //     }
+        //     to_send_tun = Some(socket.recv_from(&mut buf).await.unwrap());
+        // }
     }
 }
 
@@ -102,16 +173,12 @@ async fn server_mode(port: u16) -> Result<(), Box<dyn Error>> {
     let server = Node {
         socket,
         tun,
-        peer: SocketAddr::new(localhost_ip, 0),
-        buf: vec![0; UDP_BUFFER_SIZE],
-        to_send_tun: None,
-        recv_from_tun: None,
+        peer: SocketAddr::new(localhost_ip, 0)
     };
     server.run().await?;
 
     Ok(())
 }
-
 
 async fn client_mode(server_ip: &str, port: u16) -> Result<(), Box<dyn Error>> {
     let remote_addr = IpAddr::from_str(server_ip).unwrap();
@@ -132,10 +199,7 @@ async fn client_mode(server_ip: &str, port: u16) -> Result<(), Box<dyn Error>> {
     let client = Node {
         socket,
         tun,
-        peer: remote_server,
-        buf: vec![0; UDP_BUFFER_SIZE],
-        to_send_tun: None,
-        recv_from_tun: None,
+        peer: remote_server
     };
     client.run().await?;
 
@@ -144,9 +208,7 @@ async fn client_mode(server_ip: &str, port: u16) -> Result<(), Box<dyn Error>> {
 
 #[tokio::main]
 async fn main() {
-    Builder::new()
-        .filter(None, LevelFilter::Info)
-        .init();
+    Builder::new().filter(None, LevelFilter::Debug).init();
 
     let cli = Cli::parse();
 
