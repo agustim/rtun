@@ -2,6 +2,7 @@ use clap::{Parser, ValueEnum};
 use env_logger::Builder;
 use ipnet::Ipv4Net;
 use log::{debug, error, info, LevelFilter};
+use std::collections::HashMap;
 use std::error::Error;
 use std::net::Ipv4Addr;
 use std::net::{IpAddr, SocketAddr};
@@ -10,6 +11,7 @@ use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio_tun::Tun;
 use tokio::signal;
+use etherparse::{Ipv4HeaderSlice, SlicedPacket};
 
 const UDP_BUFFER_SIZE: usize = 17480; // 17kb
 
@@ -53,17 +55,23 @@ async fn create_tun(ipv4: &str, mtu: i32) -> tokio_tun::Tun {
 }
 
 struct Node {
-    socket: UdpSocket,
+    socket: Arc<UdpSocket>,
     tun: tokio_tun::Tun,
-    peer: SocketAddr, // Així no podem tenir més d'un client, s'hauria de canviar per un HashMap
+    peer: SocketAddr,
+    // HashMap<SocketAddr, Arc<UdpSocket>>,
+    peers : HashMap<SocketAddr, Arc<UdpSocket>>
 }
 
 async fn receive_from_tun_and_send_to_socket(
     socket: Arc<UdpSocket>,
     tun: Arc<tokio_tun::Tun>,
     peer: Arc<SocketAddr>,
+    peers_clone: HashMap<SocketAddr, Arc<UdpSocket>>
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
 
+    for(k,v) in peers_clone.iter() {
+        debug!("Hashmap-Peer: {:?} {:?}", k, v);
+    }
 
     let mut buf = [0u8; UDP_BUFFER_SIZE];
     loop {
@@ -72,6 +80,30 @@ async fn receive_from_tun_and_send_to_socket(
         debug!("t2s: Peer: {:?} {:?}", socket, peer);
         debug!("t2s; buffer: {:?}", &buf[..size]);
         debug!("t2s: tun: {:?}", tun.netmask());
+        match Ipv4HeaderSlice::from_slice(&buf[..size]) {
+            Err(e) => {
+                error!("Error parsing ip header: {:?}", e);
+            }
+            Ok(value) => {
+                debug!("source: {:?}, destination: {:?}", value.source_addr(), value.destination_addr());
+            }
+        }
+
+        match SlicedPacket::from_ip(&buf[..size]) {
+            Err(e) => {
+                error!("Error parsing packet: {:?}", e);
+            }
+            Ok(value) => {
+                assert_eq!(None, value.link);
+                assert_eq!(None, value.vlan);
+       
+                //ip & transport (udp or tcp)
+                println!("net: {:?}", value.net);
+                // Extract ipheader
+                println!("transport: {:?}", value.transport);
+                
+            }
+        }
         //let _ = socket.send_to(&buf[..size], target);
          debug!("t2s: Sent to socket");
     }
@@ -81,8 +113,12 @@ async fn receive_from_tun_and_send_to_socket(
 async fn receive_from_socket_and_send_to_tun(
     socket: Arc<UdpSocket>,
     tun: Arc<tokio_tun::Tun>,
+    peers: HashMap<SocketAddr, Arc<UdpSocket>>
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
 
+    for(k,v) in peers.iter() {
+        debug!("Hashmap-Peer: {:?} {:?}", k, v);
+    }
 
     let mut buf = [0u8; UDP_BUFFER_SIZE];
     loop {
@@ -91,8 +127,6 @@ async fn receive_from_socket_and_send_to_tun(
         tun.send(&buf[..size]).await?;
         debug!("s2t: Sent to tun");
     }
-
-
 }
 
 impl Node {
@@ -101,30 +135,32 @@ impl Node {
             socket,
             tun,
             peer,
+            peers
         } = self;
 
         debug!("Node started");
 
         // Clone udp socket
-        let socket_arc = Arc::new(socket);
-        let socket_clone = socket_arc.clone();
+        //let socket_arc = Arc::new(socket);
+        let socket_clone = socket.clone();
         // Clone tun
         let tun_arc = Arc::new(tun);
         let tun_clone = tun_arc.clone();
         // Clone peer
         let peer_arc = Arc::new(peer);
-        
 
+        let peers_clone = peers.clone();
+        
         tokio::select!{ 
 
             res = tokio::spawn(async move {
                 // receive from tun and send to socket
-                let _ = receive_from_tun_and_send_to_socket(socket_arc, tun_arc, peer_arc ).await;
+                let _ = receive_from_tun_and_send_to_socket(socket, tun_arc, peer_arc, peers_clone ).await;
             }) => { res.map_err(|e| e.into()) },
 
             res = tokio::spawn(async move {
                 // receive from socket and send to tun
-                let _ = receive_from_socket_and_send_to_tun(socket_clone, tun_clone).await;
+                let _ = receive_from_socket_and_send_to_tun(socket_clone, tun_clone, peers).await;
             }) => { res.map_err(|e| e.into()) },
 
             res = signal::ctrl_c() => {
@@ -174,12 +210,14 @@ async fn server_mode(port: u16) -> Result<(), Box<dyn Error>> {
     let localhost_ip = IpAddr::from_str("127.0.0.1").unwrap();
     let server = SocketAddr::new(localhost_ip, port);
     let socket = UdpSocket::bind(server).await?;
+    let socket_arc = Arc::new(socket);
     let tun = create_tun("10.9.0.1/24", 1500).await;
 
     let server = Node {
-        socket,
+        socket: socket_arc,
         tun,
-        peer: SocketAddr::new(localhost_ip, 0)
+        peer: SocketAddr::new(localhost_ip, 0),
+        peers: HashMap::new()
     };
     server.run().await?;
 
@@ -201,12 +239,19 @@ async fn client_mode(server_ip: &str, port: u16) -> Result<(), Box<dyn Error>> {
     socket.connect(remote_server).await?;
 
     let tun = create_tun("10.9.0.2/24", 1500).await;
+    let mut peers = HashMap::new();
+    let socket_arc = Arc::new(socket);
+    let socket_clone = socket_arc.clone();
+
+    peers.insert(remote_server, socket_arc);
 
     let client = Node {
-        socket,
+        socket: socket_clone,
         tun,
-        peer: remote_server
+        peer: remote_server,
+        peers: peers
     };
+
     client.run().await?;
 
     Ok(())

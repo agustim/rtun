@@ -75,6 +75,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrayvec"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96d30a06541fbafbc7f82ed10c06164cfbd2c401138f6addd8404629c4b16711"
+
+[[package]]
 name = "autocfg"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -192,6 +198,15 @@ dependencies = [
  "env_filter",
  "humantime",
  "log",
+]
+
+[[package]]
+name = "etherparse"
+version = "0.14.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "095ab548cf452be5813424558a18af88f0a620d0f4a3d8793aa09311a3b6fa5f"
+dependencies = [
+ "arrayvec",
 ]
 
 [[package]]
@@ -394,6 +409,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "env_logger",
+ "etherparse",
  "ipnet",
  "log",
  "tokio",

@@ -9,6 +9,7 @@ authors = ["Agustí Moll"]
 [dependencies]
 clap = { version = "4.5.4", features = ["derive"] }
 env_logger = "0.11.3"
+etherparse = "0.14.3"
 ipnet = "2.9.0"
 log = "0.4.21"
 tokio = { version = "1.37.0", features = ["full"] }
