@@ -252,7 +252,7 @@ async fn server_mode(port: u16) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-async fn client_mode(server_ip: &str, port: u16) -> Result<(), Box<dyn Error>> {
+async fn client_mode(server_ip: &str, port: u16,) -> Result<(), Box<dyn Error>> {
     let remote_addr = IpAddr::from_str(server_ip).unwrap();
     let remote_server = SocketAddr::new(remote_addr, port);
     let remote_server_arc = Arc::new(remote_server);
@@ -269,7 +269,8 @@ async fn client_mode(server_ip: &str, port: u16) -> Result<(), Box<dyn Error>> {
 
     let tun = create_tun("10.9.0.2/24", 1500).await;
     let mut peers = HashMap::new();
-    peers.insert(remote_addr, remote_server_arc);
+//    peers.insert(remote_addr, remote_server_arc);
+    peers.insert(IpAddr::V4(Ipv4Addr::new(10,9,0,1)), remote_server_arc);
 
     let socket_arc = Arc::new(socket);
     let socket_clone = socket_arc.clone();
@@ -288,7 +289,7 @@ async fn client_mode(server_ip: &str, port: u16) -> Result<(), Box<dyn Error>> {
 
 #[tokio::main]
 async fn main() {
-    Builder::new().filter(None, LevelFilter::Debug).init();
+    Builder::new().filter(None, LevelFilter::Info).init();
 
     let cli = Cli::parse();
 
