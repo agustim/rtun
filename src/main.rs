@@ -1,5 +1,6 @@
 use clap::{Parser, ValueEnum};
 use env_logger::Builder;
+use etherparse::Ipv4HeaderSlice;
 use ipnet::Ipv4Net;
 use log::{debug, error, info, LevelFilter};
 use std::collections::HashMap;
@@ -7,11 +8,10 @@ use std::error::Error;
 use std::net::Ipv4Addr;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::net::UdpSocket;
-use tokio_tun::Tun;
 use tokio::signal;
-use etherparse::{Ipv4HeaderSlice, SlicedPacket};
+use tokio_tun::Tun;
 
 const UDP_BUFFER_SIZE: usize = 17480; // 17kb
 
@@ -53,77 +53,141 @@ async fn create_tun(ipv4: &str, mtu: i32) -> tokio_tun::Tun {
     info!("Tun interface created: {:?}, with IP {}", tun.name(), ipv4);
     return tun;
 }
-
 struct Node {
     socket: Arc<UdpSocket>,
     tun: tokio_tun::Tun,
     peer: SocketAddr,
     // HashMap<SocketAddr, Arc<UdpSocket>>,
-    peers : HashMap<SocketAddr, Arc<UdpSocket>>
+    peers: Arc<Mutex<HashMap<IpAddr, Arc<SocketAddr>>>>,
+}
+
+fn get_peer_from_hashmap(
+    peers: Arc<Mutex<HashMap<IpAddr, Arc<SocketAddr>>>>,
+    destination_addrs: IpAddr,
+) -> Option<SocketAddr> {
+    let peers = peers.lock().unwrap();
+    if peers.contains_key(&destination_addrs) {
+        debug!("Peer is in hashmap");
+        // get the socket from the hashmap
+        let socket_addr = peers.get(&destination_addrs).unwrap();
+        debug!("Peer socket: {:?}", socket_addr);
+        let socket_addr = **socket_addr;
+        return Some(socket_addr);
+    } else {
+        debug!("Peer is not in hashmap");
+        return None;
+    }
 }
 
 async fn receive_from_tun_and_send_to_socket(
     socket: Arc<UdpSocket>,
     tun: Arc<tokio_tun::Tun>,
     peer: Arc<SocketAddr>,
-    peers_clone: HashMap<SocketAddr, Arc<UdpSocket>>
+    peers: Arc<Mutex<HashMap<IpAddr, Arc<SocketAddr>>>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-
-    for(k,v) in peers_clone.iter() {
-        debug!("Hashmap-Peer: {:?} {:?}", k, v);
-    }
-
     let mut buf = [0u8; UDP_BUFFER_SIZE];
     loop {
         let size = tun.recv(&mut buf).await?;
-        debug!("t2s: Received {}/{} bytes from tun sent to: {}", size, UDP_BUFFER_SIZE, peer);
-        debug!("t2s: Peer: {:?} {:?}", socket, peer);
-        debug!("t2s; buffer: {:?}", &buf[..size]);
-        debug!("t2s: tun: {:?}", tun.netmask());
+
+        {
+            let peers = peers.lock().unwrap();
+            for (k, v) in peers.iter() {
+                debug!("t2s: Hashmap-Peer: {:?} {:?}", k, v);
+            }
+        }
+        debug!(
+            "t2s: Received {}/{} bytes from tun sent to: {}",
+            size, UDP_BUFFER_SIZE, peer
+        );
+
         match Ipv4HeaderSlice::from_slice(&buf[..size]) {
             Err(e) => {
                 error!("Error parsing ip header: {:?}", e);
             }
             Ok(value) => {
-                debug!("source: {:?}, destination: {:?}", value.source_addr(), value.destination_addr());
+                let destination_addrs = IpAddr::V4(value.destination_addr());
+                let source_addrs = IpAddr::V4(value.source_addr());
+                debug!(
+                    "source: {:?}, destination: {:?}",
+                    source_addrs, destination_addrs
+                );
+                // {
+                //     let peers = peers.lock().unwrap();
+                //     if peers.contains_key(&destination_addrs) {
+                //         debug!("t2s: Peer is in hashmap");
+                //         // get the socket from the hashmap
+                //         let socket_addr = peers.get(&destination_addrs).unwrap();
+                //         debug!("t2s: Peer socket: {:?}", socket_addr);
+                //         let socket_addr = **socket_addr;
+                //         let _ = socket.send_to(&buf[..size], socket_addr);
+                //         debug!("t2s: Sent to socket");
+                //     } else {
+                //         debug!("t2s: Peer is not in hashmap");
+                //     }
+
+                // }
+                match get_peer_from_hashmap(peers.clone(), destination_addrs) {
+                    Some(socket_addr) => {
+                        let _ = socket.send_to(&buf[..size], socket_addr).await;
+                        debug!("t2s: Sent to socket");
+                    }
+                    None => {
+                        debug!("t2s: Peer is not in hashmap");
+                    }
+                }
             }
         }
 
-        match SlicedPacket::from_ip(&buf[..size]) {
-            Err(e) => {
-                error!("Error parsing packet: {:?}", e);
-            }
-            Ok(value) => {
-                assert_eq!(None, value.link);
-                assert_eq!(None, value.vlan);
-       
-                //ip & transport (udp or tcp)
-                println!("net: {:?}", value.net);
-                // Extract ipheader
-                println!("transport: {:?}", value.transport);
-                
-            }
-        }
         //let _ = socket.send_to(&buf[..size], target);
-         debug!("t2s: Sent to socket");
     }
-
 }
 
 async fn receive_from_socket_and_send_to_tun(
     socket: Arc<UdpSocket>,
     tun: Arc<tokio_tun::Tun>,
-    peers: HashMap<SocketAddr, Arc<UdpSocket>>
+    peers: Arc<Mutex<HashMap<IpAddr, Arc<SocketAddr>>>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-
-    for(k,v) in peers.iter() {
-        debug!("Hashmap-Peer: {:?} {:?}", k, v);
-    }
-
     let mut buf = [0u8; UDP_BUFFER_SIZE];
     loop {
         let (size, peer) = socket.recv_from(&mut buf).await?;
-        debug!("s2t: Received {}/{} bytes from {}", size, UDP_BUFFER_SIZE, peer);
+        debug!("s2t: Peer: {:?} {:?}", socket, peer);
+        debug!("s2t; buffer: {:?}", &buf[..size]);
+        debug!("s2t: tun: {:?}", tun.netmask());
+        match Ipv4HeaderSlice::from_slice(&buf[..size]) {
+            Err(e) => {
+                error!("Error parsing ip header: {:?}", e);
+            }
+            Ok(value) => {
+                let source_addrs = value.source_addr();
+                let destination_addrs = value.destination_addr();
+                debug!(
+                    "s2t:source: {:?}, destination: {:?}",
+                    source_addrs, destination_addrs
+                );
+                debug!("s2t: Sent to socket");
+
+                {
+                    let mut peers = peers.lock().unwrap();
+
+                    for (k, v) in peers.iter() {
+                        debug!("s2t:Hashmap-Peer: {:?} {:?}", k, v);
+                    }
+
+                    // If peer is not in the hashmap, add it
+                    debug!("Peer is in hashmap: {:?}", peers.contains_key(&peer.ip()));
+                    if !peers.contains_key(&peer.ip()) {
+                        debug!("Adding peer: {:?}", peer);
+                        let socket_arc = Arc::new(peer);
+                        peers.insert(IpAddr::V4(source_addrs), socket_arc);
+                    }
+                }
+            }
+        }
+        debug!(
+            "s2t: Received {}/{} bytes from {}",
+            size, UDP_BUFFER_SIZE, peer
+        );
+        debug!("s2t; buffer: {:?}", &buf[..size]);
         tun.send(&buf[..size]).await?;
         debug!("s2t: Sent to tun");
     }
@@ -135,7 +199,7 @@ impl Node {
             socket,
             tun,
             peer,
-            peers
+            peers,
         } = self;
 
         debug!("Node started");
@@ -150,8 +214,8 @@ impl Node {
         let peer_arc = Arc::new(peer);
 
         let peers_clone = peers.clone();
-        
-        tokio::select!{ 
+
+        tokio::select! {
 
             res = tokio::spawn(async move {
                 // receive from tun and send to socket
@@ -167,47 +231,11 @@ impl Node {
                 res.map_err(|e| e.into())
             }
         }
-
-            
-        // tokio::spawn(async move {
-        //     let mut buf = [0u8; UDP_BUFFER_SIZE];
-        //     debug!("in spawn tun");
-        //     debug!("Before Peer: {:?}", peer);
-        //     loop {
-
-        //         if let Some(size) = recv_from_tun {
-        //             debug!("Received {}/{} bytes {:?}", size, UDP_BUFFER_SIZE, buf[..size].to_vec() );
-
-        //             debug!("Peer: {:?}", peer);
-        //             if peer.ip().is_unspecified() || peer.port() == 0 {
-        //                 debug!("Peer not set, skipping packet");
-        //             } else {
-        //                 let _ = socket_clone.send_to(&buf[..size], &peer).await.unwrap();
-        //             }
-        //         }
-        //         recv_from_tun = Some(tun_clone.recv(&mut buf).await.unwrap());
-        //     }
-        // });
-
-        // let mut buf = [0u8; UDP_BUFFER_SIZE];
-        // loop {
-        //     debug!("Looping");
-
-        //     if let Some((size, peer_connect)) = to_send_tun {
-        //         debug!(
-        //             "Received {}/{} bytes from {}",
-        //             size, UDP_BUFFER_SIZE, peer_connect
-        //         );
-        //         //peer = peer_connect;
-        //         tun_arc.send(&buf[..size]).await.unwrap();
-        //     }
-        //     to_send_tun = Some(socket.recv_from(&mut buf).await.unwrap());
-        // }
     }
 }
 
 async fn server_mode(port: u16) -> Result<(), Box<dyn Error>> {
-    let localhost_ip = IpAddr::from_str("127.0.0.1").unwrap();
+    let localhost_ip = IpAddr::from_str("0.0.0.0").unwrap();
     let server = SocketAddr::new(localhost_ip, port);
     let socket = UdpSocket::bind(server).await?;
     let socket_arc = Arc::new(socket);
@@ -217,7 +245,7 @@ async fn server_mode(port: u16) -> Result<(), Box<dyn Error>> {
         socket: socket_arc,
         tun,
         peer: SocketAddr::new(localhost_ip, 0),
-        peers: HashMap::new()
+        peers: Arc::new(Mutex::new(HashMap::new())),
     };
     server.run().await?;
 
@@ -227,6 +255,7 @@ async fn server_mode(port: u16) -> Result<(), Box<dyn Error>> {
 async fn client_mode(server_ip: &str, port: u16) -> Result<(), Box<dyn Error>> {
     let remote_addr = IpAddr::from_str(server_ip).unwrap();
     let remote_server = SocketAddr::new(remote_addr, port);
+    let remote_server_arc = Arc::new(remote_server);
 
     let local_addr: SocketAddr = if remote_addr.is_ipv4() {
         "0.0.0.0:0"
@@ -240,16 +269,16 @@ async fn client_mode(server_ip: &str, port: u16) -> Result<(), Box<dyn Error>> {
 
     let tun = create_tun("10.9.0.2/24", 1500).await;
     let mut peers = HashMap::new();
+    peers.insert(remote_addr, remote_server_arc);
+
     let socket_arc = Arc::new(socket);
     let socket_clone = socket_arc.clone();
-
-    peers.insert(remote_server, socket_arc);
 
     let client = Node {
         socket: socket_clone,
         tun,
         peer: remote_server,
-        peers: peers
+        peers: Arc::new(Mutex::new(peers)),
     };
 
     client.run().await?;
