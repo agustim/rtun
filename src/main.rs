@@ -31,7 +31,7 @@ struct Cli {
     address: String,
     #[arg(short, long, default_value = "")]
     gateway: String,
-    #[arg(value_enum, long, default_value = "Error")]
+    #[arg(value_enum, short, long = "loglevel", default_value = "Error")]
     log_level: LevelFilter,
 }
 #[derive(Clone, ValueEnum)]
