@@ -19,4 +19,9 @@ $ cargo add clap --features derive
 ```
 
 ### 3rd Step - UDP Server and client
+Using tokio:select! and spawn elements
+
+### 4rt Step - Mutex between threads
+Using Mutex and space for MutexGuard
+
 

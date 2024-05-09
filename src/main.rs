@@ -57,7 +57,6 @@ struct Node {
     socket: Arc<UdpSocket>,
     tun: tokio_tun::Tun,
     peer: SocketAddr,
-    // HashMap<SocketAddr, Arc<UdpSocket>>,
     peers: Arc<Mutex<HashMap<IpAddr, Arc<SocketAddr>>>>,
 }
 
@@ -111,21 +110,6 @@ async fn receive_from_tun_and_send_to_socket(
                     "source: {:?}, destination: {:?}",
                     source_addrs, destination_addrs
                 );
-                // {
-                //     let peers = peers.lock().unwrap();
-                //     if peers.contains_key(&destination_addrs) {
-                //         debug!("t2s: Peer is in hashmap");
-                //         // get the socket from the hashmap
-                //         let socket_addr = peers.get(&destination_addrs).unwrap();
-                //         debug!("t2s: Peer socket: {:?}", socket_addr);
-                //         let socket_addr = **socket_addr;
-                //         let _ = socket.send_to(&buf[..size], socket_addr);
-                //         debug!("t2s: Sent to socket");
-                //     } else {
-                //         debug!("t2s: Peer is not in hashmap");
-                //     }
-
-                // }
                 match get_peer_from_hashmap(peers.clone(), destination_addrs) {
                     Some(socket_addr) => {
                         let _ = socket.send_to(&buf[..size], socket_addr).await;
@@ -137,8 +121,6 @@ async fn receive_from_tun_and_send_to_socket(
                 }
             }
         }
-
-        //let _ = socket.send_to(&buf[..size], target);
     }
 }
 
