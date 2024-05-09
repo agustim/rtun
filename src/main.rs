@@ -14,6 +14,10 @@ use tokio::signal;
 use tokio_tun::Tun;
 
 const UDP_BUFFER_SIZE: usize = 17480; // 17kb
+const DEFAULT_PORT: &str = "1714";
+const DEFAULT_IFACE: &str = "rtun0";
+const DEFAULT_SERVER_ADDRESS: &str = "10.9.0.1/24";
+const DEFAULT_CLIENT_ADDRESS: &str = "10.9.0.2/24";
 
 #[derive(Parser)]
 #[command(version = "0.0.1", about, long_about = None)]
@@ -21,11 +25,11 @@ const UDP_BUFFER_SIZE: usize = 17480; // 17kb
 struct Cli {
     #[arg(value_enum, short, long)]
     mode: Mode,
-    #[arg(short, long, default_value = "1714")]
+    #[arg(short, long, default_value = DEFAULT_PORT)]
     port: u16,
     #[arg(short = 'o', long, default_value = "")]
     host: String,
-    #[arg(short, long, default_value = "rtun0")]
+    #[arg(short, long, default_value = DEFAULT_IFACE)]
     iface: String,
     #[arg(short, long, default_value = "")]
     address: String,
@@ -248,12 +252,7 @@ async fn client_mode(server_ip: &str, port: u16, gateway_ip: &str, iface: &str, 
     let remote_server = SocketAddr::new(remote_addr, port);
     let remote_server_arc = Arc::new(remote_server);
 
-    let local_addr: SocketAddr = if remote_addr.is_ipv4() {
-        "0.0.0.0:0"
-    } else {
-        "[::]:0"
-    }
-    .parse()?;
+    let local_addr: SocketAddr = if remote_addr.is_ipv4() { "0.0.0.0:0" } else { "[::]:0"}.parse()?;
 
     let socket = UdpSocket::bind(local_addr).await?;
     socket.connect(remote_server).await?;
@@ -287,12 +286,12 @@ async fn main() {
 
     match cli.mode {
         Mode::Server => {
-            let address: String = if cli.address.is_empty() { "10.9.0.1/24".to_owned() } else { cli.address };
+            let address: String = if cli.address.is_empty() { DEFAULT_SERVER_ADDRESS.to_owned() } else { cli.address };
             info!("Server dev({} - {}) in port {} started", cli.iface, address, cli.port);
             let _ = server_mode(cli.port, &cli.iface, &address).await;
         }
         Mode::Client => {
-            let address: String = if cli.address.is_empty() { "10.9.0.2/24".to_owned() } else { cli.address };
+            let address: String = if cli.address.is_empty() { DEFAULT_CLIENT_ADDRESS.to_owned() } else { cli.address };
 
             if cli.host.is_empty() {
                 error!("host is required for client mode");

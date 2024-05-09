@@ -25,3 +25,10 @@ Using tokio:select! and spawn elements
 Using Mutex and space for MutexGuard
 
 
+### 5rt Step - Reduce binary
+
+```
+cargo install --force cargo-strip
+cargo strip
+```
+When cross-compiling, use ```--target```
