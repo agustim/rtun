@@ -31,6 +31,8 @@ struct Cli {
     address: String,
     #[arg(short, long, default_value = "")]
     gateway: String,
+    #[arg(value_enum, long, default_value = "Error")]
+    log_level: LevelFilter,
 }
 #[derive(Clone, ValueEnum)]
 enum Mode {
@@ -279,9 +281,9 @@ async fn client_mode(server_ip: &str, port: u16, gateway_ip: &str, iface: &str, 
 
 #[tokio::main]
 async fn main() {
-    Builder::new().filter(None, LevelFilter::Info).init();
-
+    
     let cli = Cli::parse();
+    Builder::new().filter(None, cli.log_level).init();
 
     match cli.mode {
         Mode::Server => {
