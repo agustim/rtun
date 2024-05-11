@@ -12,12 +12,20 @@ use std::sync::{Arc, Mutex};
 use tokio::net::UdpSocket;
 use tokio::signal;
 use tokio_tun::Tun;
+// use base64;
+use crypto;
+use rustc_serialize::hex::FromHex;
+use std::iter::repeat;
+use crypto::symmetriccipher::SynchronousStreamCipher;
+use core::str;
 
-const UDP_BUFFER_SIZE: usize = 17480; // 17kb
+const UDP_BUFFER_SIZE: usize = 1024 * 4; // 17kb
 const DEFAULT_PORT: &str = "1714";
 const DEFAULT_IFACE: &str = "rtun0";
 const DEFAULT_SERVER_ADDRESS: &str = "10.9.0.1/24";
 const DEFAULT_CLIENT_ADDRESS: &str = "10.9.0.2/24";
+const KEY : &str = "0102030405060708091011121314151617181920212223242526272829303132";
+const IV : &str = "010203040506070809101112";
 
 #[derive(Parser)]
 #[command(version = "0.0.1", about, long_about = None)]
@@ -61,6 +69,44 @@ async fn create_tun(iface: &str, ipv4: &str, mtu: i32) -> tokio_tun::Tun {
     info!("Tun interface created: {:?}, with IP {}", tun.name(), ipv4);
     return tun;
 }
+
+// Encrypt and Decrypt functions
+fn hex_to_bytes(s: &str) -> Vec<u8> {
+    s.from_hex().unwrap()
+}
+
+fn encrypt (key: &str, iv: &str, msg: &[u8]) -> Vec<u8> {
+    let key=&hex_to_bytes( key)[..];
+    let iv=&hex_to_bytes( iv)[..];
+    let mut c = crypto::chacha20::ChaCha20::new(&key, iv);
+    let mut output: Vec<u8> = repeat(0).take(msg.len()).collect();
+    c.process(&msg[..], &mut output[..]);
+    return output;
+}
+
+// fn encrypt_base64 (key: &str, iv: &str, msg: &str) -> String {
+//     let output = encrypt(key, iv, msg);
+//     let result = base64::encode(&output[..]);
+//     return result;
+// }
+
+fn decrypt (key: &str, iv: &str, msg: Vec<u8>, ret: &mut [u8]) {
+    let key=&hex_to_bytes( key)[..];
+    let iv=&hex_to_bytes( iv)[..];
+    let mut c = crypto::chacha20::ChaCha20::new(&key, iv);
+    let mut output = msg;
+    let mut newoutput: Vec<u8> = repeat(0).take(output.len()).collect();
+    c.process(&mut output[..], &mut newoutput[..]);
+    ret.copy_from_slice(&newoutput[..]);
+}
+
+// fn decrypt_base64 (key: &str, iv: &str, msg: &str) -> String {
+//     let output = base64::decode(msg).unwrap();
+//     let result = decrypt(key, iv, output);
+//     return result;
+// }
+
+// Node
 struct Node {
     socket: Arc<UdpSocket>,
     tun: tokio_tun::Tun,
@@ -142,7 +188,11 @@ async fn receive_tun_send_socket(
                 match get_peer_from_hashmap(peers.clone(), destination_addrs) {
                     Some(socket_addr) => {
                         // Here: we will encrypt the buffer
-                        let _ = socket.send_to(&buf[..size], socket_addr).await;
+                        //let encrypted = encrypt_base64(KEY, IV, str::from_utf8(&buf[..size]).unwrap());
+                        //let _ = socket.send_to(encrypted.as_bytes(), socket_addr).await;
+                        let encrypted = encrypt(KEY, IV, &buf[..size]);
+                        let _ = socket.send_to(&encrypted[..], socket_addr).await;
+                        //let _ = socket.send_to(&buf[..size], socket_addr).await;
                         debug!("receive_tun_send_socket: : Sent to socket");
                     }
                     None => {
@@ -159,9 +209,9 @@ async fn receive_socket_send_tun(
     tun: Arc<tokio_tun::Tun>,
     peers: Arc<Mutex<HashMap<IpAddr, Arc<SocketAddr>>>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let mut buf = [0u8; UDP_BUFFER_SIZE];
+    let mut buf_enc = [0u8; UDP_BUFFER_SIZE];
     loop {
-        let (size, peer) = socket.recv_from(&mut buf).await?;
+        let (size, peer) = socket.recv_from(&mut buf_enc).await?;
 
         debug!(
             "receive_socket_send_tun: Received from socket {}/{} bytes from tun sent to: {}",
@@ -169,6 +219,12 @@ async fn receive_socket_send_tun(
         );
 
         // Here: we will desencrypt the buffer
+        //let decrypted = decrypt_base64(KEY, IV, str::from_utf8(&buf_enc[..size]).unwrap());
+        //let buf = decrypted.as_bytes();
+        debug!("receive_socket_send_tun: size buffer_enc: {:?}", size);
+        let mut buf = [0u8; UDP_BUFFER_SIZE];
+        decrypt(KEY, IV, buf_enc.to_vec(), &mut buf);
+        debug!("receive_socket_send_tun: size buffer_dec: {:?}", buf.len());
 
         match Ipv4HeaderSlice::from_slice(&buf[..size]) {
             Err(e) => {
@@ -184,7 +240,7 @@ async fn receive_socket_send_tun(
                 add_peer_to_hashmap(peers.clone(), peer, source_addrs);
             }
         }
-        debug!("receive_socket_send_tun; buffer: {:?}", &buf[..size]);
+        debug!("receive_socket_send_tun; size buffer: {:?}", size);
         debug!("receive_socket_send_tun: Sent to tun");
         tun.send(&buf[..size]).await?;
     }
