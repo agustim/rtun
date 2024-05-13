@@ -19,7 +19,7 @@ use std::iter::repeat;
 use crypto::symmetriccipher::SynchronousStreamCipher;
 use core::str;
 
-const UDP_BUFFER_SIZE: usize = 1024 * 4; // 17kb
+const UDP_BUFFER_SIZE: usize = 1024 * 200; // 17kb
 const DEFAULT_PORT: &str = "1714";
 const DEFAULT_IFACE: &str = "rtun0";
 const DEFAULT_SERVER_ADDRESS: &str = "10.9.0.1/24";
@@ -96,6 +96,8 @@ fn decrypt (key: &str, iv: &str, msg: Vec<u8>, ret: &mut [u8]) {
     let mut c = crypto::chacha20::ChaCha20::new(&key, iv);
     let mut output = msg;
     let mut newoutput: Vec<u8> = repeat(0).take(output.len()).collect();
+    debug!("decrypt: size buffer: {:?}", output.len());
+    debug!("decrypt: size ret: {:?}", ret.len());
     c.process(&mut output[..], &mut newoutput[..]);
     ret.copy_from_slice(&newoutput[..]);
 }
@@ -222,8 +224,9 @@ async fn receive_socket_send_tun(
         //let decrypted = decrypt_base64(KEY, IV, str::from_utf8(&buf_enc[..size]).unwrap());
         //let buf = decrypted.as_bytes();
         debug!("receive_socket_send_tun: size buffer_enc: {:?}", size);
-        let mut buf = [0u8; UDP_BUFFER_SIZE];
-        decrypt(KEY, IV, buf_enc.to_vec(), &mut buf);
+        //let mut buf = [0u8; UDP_BUFFER_SIZE];
+        let mut buf: Vec<u8> = repeat(0).take(size).collect();
+        decrypt(KEY, IV, buf_enc[..size].to_vec(), &mut buf[..]);
         debug!("receive_socket_send_tun: size buffer_dec: {:?}", buf.len());
 
         match Ipv4HeaderSlice::from_slice(&buf[..size]) {
