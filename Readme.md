@@ -44,3 +44,7 @@ First version, encrypt and decrypt with static key (in code OMG!) with ChaCha20
 ```
 RUSTFLAGS='-C target-feature=+crt-static' cargo build --release --target x86_64-unknown-linux-gnu
 ```
+
+### 8rt Step - Add action workflow
+
+https://github.com/marketplace/actions/build-and-upload-rust-binary-to-github-releases
