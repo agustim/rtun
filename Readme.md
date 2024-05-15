@@ -32,3 +32,15 @@ cargo install --force cargo-strip
 cargo strip
 ```
 When cross-compiling, use ```--target```
+
+
+### 6rt Step - Crypto
+
+First version, encrypt and decrypt with static key (in code OMG!) with ChaCha20
+
+
+### 7rt Step - Static build
+
+```
+RUSTFLAGS='-C target-feature=+crt-static' cargo build --release --target x86_64-unknown-linux-gnu
+```
