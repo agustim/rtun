@@ -292,11 +292,11 @@ async fn receive_socket_send_tun(
                 let key:[u8;MAX_KEY_SIZE] = key_to_array(key).unwrap();
                 let iv:[u8;MAX_IV_SIZE] = iv_to_array(iv).unwrap();
                 add_peer_to_hashmap(peers.clone(), peer, source_addrs, key, iv);
+                debug!("receive_socket_send_tun; size buffer: {:?}", size);
+                debug!("receive_socket_send_tun: Sent to tun");
+                tun.send(&buf[..size]).await?;
             }
         }
-        debug!("receive_socket_send_tun; size buffer: {:?}", size);
-        debug!("receive_socket_send_tun: Sent to tun");
-        tun.send(&buf[..size]).await?;
     }
 }
 
