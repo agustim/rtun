@@ -157,20 +157,34 @@ struct Node {
     key: [u8;MAX_KEY_SIZE],
     iv: [u8;MAX_IV_SIZE],
     peer: SocketAddr,
-    peers: Arc<Mutex<HashMap<IpAddr, Arc<Peer>>>>,
+    peers: Arc<Mutex<HashMap<Ipv4Net, Arc<Peer>>>>,
 }
 
 fn get_peer_from_hashmap(
-    peers: Arc<Mutex<HashMap<IpAddr, Arc<Peer>>>>,
+    peers: Arc<Mutex<HashMap<Ipv4Net, Arc<Peer>>>>,
     destination_addrs: IpAddr,
 ) -> Option<Arc<Peer>> {
     let peers = peers.lock().unwrap();
     debug!("Get IP Address '{:?}' from HashMap (get_peer_from_hashmap)", destination_addrs);
-    if peers.contains_key(&destination_addrs) {
-        // get the socket from the hashmap
-        let peer_addr = peers.get(&destination_addrs).unwrap();
-        debug!("Existing IP Address in HashMap (get_peer_from_hashmap)");
-        return Some(peer_addr.clone());
+    let mut prefix = 0;
+    let mut peer_ret: Option<Arc<Peer>> = None;
+
+    for (k, v) in peers.iter() {
+        debug!("Element in HashMap: {:?} [{:?} {:?} {:?}]", k, v.socket_addr, v.key, v.iv);
+        let destination_addrs: Ipv4Addr = match destination_addrs {
+            IpAddr::V4(ip) => ip,
+            _ => return None,
+        };
+        if k.contains(&destination_addrs) {
+            debug!("Existing IP Address in HashMap (get_peer_from_hashmap)");
+            if prefix <= k.prefix_len() {
+                prefix = k.prefix_len();
+                peer_ret = Some(v.clone());
+            }
+        }
+    }
+    if let Some(peer_ret) = peer_ret {
+        return Some(peer_ret );
     } else {
         debug!("NO Existing IP Address in HashMap (get_peer_from_hashmap)");
         return None;
@@ -179,7 +193,7 @@ fn get_peer_from_hashmap(
 
 // Work with the HashMap
 
-fn show_hashmap(peers: Arc<Mutex<HashMap<IpAddr, Arc<Peer>>>>) {
+fn show_hashmap(peers: Arc<Mutex<HashMap<Ipv4Net, Arc<Peer>>>>) {
     let peers = peers.lock().unwrap();
     for (k, v) in peers.iter() {
         debug!("Element in HashMap: {:?} [{:?} {:?} {:?}]", k, v.socket_addr, v.key, v.iv);
@@ -187,7 +201,7 @@ fn show_hashmap(peers: Arc<Mutex<HashMap<IpAddr, Arc<Peer>>>>) {
 }
 
 fn add_peer_to_hashmap(
-    peers: Arc<Mutex<HashMap<IpAddr, Arc<Peer>>>>,
+    peers: Arc<Mutex<HashMap<Ipv4Net, Arc<Peer>>>>,
     peer: SocketAddr,
     source_addrs: Ipv4Addr,
     key: [u8;MAX_KEY_SIZE],
@@ -195,17 +209,17 @@ fn add_peer_to_hashmap(
 ) {
     let mut peers = peers.lock().unwrap();
 
+    let peer_net = Ipv4Net::new(source_addrs, 32).unwrap();
     // If peer is not in the hashmap, add it
-    debug!("Peer is in hashmap: {:?}", peers.contains_key(&peer.ip()));
-    if !peers.contains_key(&peer.ip()) {
-        debug!("Adding peer: {:?}", peer);
-        let insert_peer = Arc::new(Peer {
-            socket_addr: peer,
-            key,
-            iv,
-        });
-        peers.insert(IpAddr::V4(source_addrs), insert_peer);
-    }
+    debug!("Peer is in hashmap: {:?}", peers.contains_key(&peer_net));
+    debug!("Adding or Update peer: {:?}", peer);
+    let insert_peer = Arc::new(Peer {
+        socket_addr: peer,
+        key,
+        iv,
+    });
+    peers.insert(peer_net, insert_peer);
+
 }
 
 async fn receive_tun_send_socket(
@@ -214,7 +228,7 @@ async fn receive_tun_send_socket(
     key: &[u8],
     iv: &[u8],
     peer: Arc<SocketAddr>,
-    peers: Arc<Mutex<HashMap<IpAddr, Arc<Peer>>>>,
+    peers: Arc<Mutex<HashMap<Ipv4Net, Arc<Peer>>>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut buf = [0u8; UDP_BUFFER_SIZE];
 
@@ -260,7 +274,7 @@ async fn receive_socket_send_tun(
     tun: Arc<tokio_tun::Tun>,
     key: &[u8],
     iv: &[u8],
-    peers: Arc<Mutex<HashMap<IpAddr, Arc<Peer>>>>,
+    peers: Arc<Mutex<HashMap<Ipv4Net, Arc<Peer>>>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut buf_enc = [0u8; UDP_BUFFER_SIZE];
 
@@ -380,14 +394,15 @@ async fn client_mode(server_ip: &str, key: &[u8], iv: &[u8], port: u16, gateway_
     let key:[u8;MAX_KEY_SIZE] = key_to_array(key).unwrap();
     let iv:[u8;MAX_IV_SIZE] = iv_to_array(iv).unwrap();
 
-    let mut peers: HashMap<IpAddr, Arc<Peer>> = HashMap::new();
+    let mut peers: HashMap<Ipv4Net, Arc<Peer>> = HashMap::new();
     let remote_tun_server: Ipv4Addr = gateway_ip.parse().unwrap();
     let insert_peer = Arc::new(Peer {
         socket_addr: remote_server,
         key,
         iv,
     });
-    peers.insert(IpAddr::V4(remote_tun_server), insert_peer);
+    let remote_peer_net = Ipv4Net::new(remote_tun_server, 24).unwrap();
+    peers.insert(remote_peer_net, insert_peer);
 
     let socket_arc = Arc::new(socket);
     let socket_clone = socket_arc.clone();
