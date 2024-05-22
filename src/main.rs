@@ -58,7 +58,7 @@ enum Mode {
     Client,
 }
 
-async fn create_tun(iface: &str, ipv4: &str, mtu: i32) -> tokio_tun::Tun {
+async fn create_tun(iface: &str, ipv4: &str, mtu: i32) -> Arc<tokio_tun::Tun> {
     let net: Ipv4Net = ipv4.parse().unwrap();
 
     let tun = Tun::builder()
@@ -73,7 +73,7 @@ async fn create_tun(iface: &str, ipv4: &str, mtu: i32) -> tokio_tun::Tun {
         .try_build()
         .unwrap();
     info!("Tun interface created: {:?}, with IP {}", tun.name(), ipv4);
-    return tun;
+    return Arc::new(tun);
 }
 
 //Segur que hi ha una forma més correcte!!
@@ -150,15 +150,6 @@ struct Peer {
     iv: [u8;MAX_IV_SIZE],
 }
 
-// Node
-struct Node {
-    socket: Arc<UdpSocket>,
-    tun: tokio_tun::Tun,
-    key: [u8;MAX_KEY_SIZE],
-    iv: [u8;MAX_IV_SIZE],
-    peer: SocketAddr,
-    peers: Arc<Mutex<HashMap<Ipv4Net, Arc<Peer>>>>,
-}
 
 fn get_peer_from_hashmap(
     peers: Arc<Mutex<HashMap<Ipv4Net, Arc<Peer>>>>,
@@ -222,100 +213,80 @@ fn add_peer_to_hashmap(
 
 }
 
-async fn receive_tun_send_socket(
+// Node
+struct Node {
     socket: Arc<UdpSocket>,
     tun: Arc<tokio_tun::Tun>,
-    key: &[u8],
-    iv: &[u8],
-    peer: Arc<SocketAddr>,
+    key: [u8;MAX_KEY_SIZE],
+    iv: [u8;MAX_IV_SIZE],
+    peer: SocketAddr,
     peers: Arc<Mutex<HashMap<Ipv4Net, Arc<Peer>>>>,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let mut buf = [0u8; UDP_BUFFER_SIZE];
+}
 
-    loop {
-        let size = tun.recv(&mut buf).await?;
 
-        debug!(
-            "receive_tun_send_socket: Received from tun {}/{} bytes from tun sent to: {}",
-            size, UDP_BUFFER_SIZE, peer
-        );
-        
-        show_hashmap(peers.clone());
-        
-        match Ipv4HeaderSlice::from_slice(&buf[..size]) {
-            Err(e) => {
-                debug!("receive_tun_send_socket: Ignore Package with any problem in IPv4Header: {:?}", e);
-            }
-            Ok(value) => {
-                let destination_addrs = IpAddr::V4(value.destination_addr());
-                let source_addrs = IpAddr::V4(value.source_addr());
-                debug!(
-                    "receive_tun_send_socket: source: {:?}, destination: {:?}",
-                    source_addrs, destination_addrs
-                );
-                match get_peer_from_hashmap(peers.clone(), destination_addrs) {
-                    Some(peer_addr) => {
+impl Node {
 
-                        let encrypted = encrypt(&key, &iv, &buf[..size]);
-                        let _ = socket.send_to(&encrypted[..], peer_addr.socket_addr).await;
-                        debug!("receive_tun_send_socket: : Sent to socket");
-                    }
-                    None => {
-                        debug!("receive_tun_send_socket: : Peer is not in hashmap");
-                    }
+    fn clone (&self) -> Self {
+        Node {
+            socket: self.socket.clone(),
+            tun: self.tun.clone(),
+            key: self.key,
+            iv: self.iv,
+            peer: self.peer,
+            peers: self.peers.clone(),
+        }
+    }
+
+    async fn receive_socket_send_tun(self) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let Node {
+            socket,
+            tun,
+            key,
+            iv,
+            peer: _,
+            peers,
+        } = self;
+
+        let mut buf_enc = [0u8; UDP_BUFFER_SIZE];
+    
+        loop {
+            let (size, peer) = socket.recv_from(&mut buf_enc).await?;
+    
+            debug!(
+                "receive_socket_send_tun: Received from socket {}/{} bytes from tun sent to: {}",
+                size, UDP_BUFFER_SIZE, peer
+            );
+    
+            debug!("receive_socket_send_tun: size buffer_enc: {:?}", size);
+            //let mut buf = [0u8; UDP_BUFFER_SIZE];
+            let mut buf: Vec<u8> = repeat(0).take(size).collect();
+            decrypt(&key, &iv, buf_enc[..size].to_vec(), &mut buf[..]);
+            debug!("receive_socket_send_tun: size buffer_dec: {:?}", buf.len());
+    
+            match Ipv4HeaderSlice::from_slice(&buf[..size]) {
+                Err(e) => {
+                    error!("receive_socket_send_tun: Ignore Package with any problem in IPv4Header: {:?}", e);
+                }
+                Ok(value) => {
+                    let source_addrs = value.source_addr();
+                    let destination_addrs = value.destination_addr();
+                    debug!(
+                        "receive_socket_send_tun: {:?} => {:?}",
+                        source_addrs, destination_addrs
+                    );
+                    let key:[u8;MAX_KEY_SIZE] = key_to_array(&self.key).unwrap();
+                    let iv:[u8;MAX_IV_SIZE] = iv_to_array(&self.iv).unwrap();
+                    add_peer_to_hashmap(peers.clone(), peer, source_addrs, key, iv);
+                    debug!("receive_socket_send_tun; size buffer: {:?}", size);
+                    debug!("receive_socket_send_tun: Sent to tun");
+                    tun.send(&buf[..size]).await?;
                 }
             }
         }
     }
-}
+    
+    async fn receive_tun_send_socket(self) -> Result<(), Box<dyn Error + Send + Sync>> {
 
-async fn receive_socket_send_tun(
-    socket: Arc<UdpSocket>,
-    tun: Arc<tokio_tun::Tun>,
-    key: &[u8],
-    iv: &[u8],
-    peers: Arc<Mutex<HashMap<Ipv4Net, Arc<Peer>>>>,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let mut buf_enc = [0u8; UDP_BUFFER_SIZE];
-
-    loop {
-        let (size, peer) = socket.recv_from(&mut buf_enc).await?;
-
-        debug!(
-            "receive_socket_send_tun: Received from socket {}/{} bytes from tun sent to: {}",
-            size, UDP_BUFFER_SIZE, peer
-        );
-
-        debug!("receive_socket_send_tun: size buffer_enc: {:?}", size);
-        //let mut buf = [0u8; UDP_BUFFER_SIZE];
-        let mut buf: Vec<u8> = repeat(0).take(size).collect();
-        decrypt(key, iv, buf_enc[..size].to_vec(), &mut buf[..]);
-        debug!("receive_socket_send_tun: size buffer_dec: {:?}", buf.len());
-
-        match Ipv4HeaderSlice::from_slice(&buf[..size]) {
-            Err(e) => {
-                error!("receive_socket_send_tun: Ignore Package with any problem in IPv4Header: {:?}", e);
-            }
-            Ok(value) => {
-                let source_addrs = value.source_addr();
-                let destination_addrs = value.destination_addr();
-                debug!(
-                    "receive_socket_send_tun: {:?} => {:?}",
-                    source_addrs, destination_addrs
-                );
-                let key:[u8;MAX_KEY_SIZE] = key_to_array(key).unwrap();
-                let iv:[u8;MAX_IV_SIZE] = iv_to_array(iv).unwrap();
-                add_peer_to_hashmap(peers.clone(), peer, source_addrs, key, iv);
-                debug!("receive_socket_send_tun; size buffer: {:?}", size);
-                debug!("receive_socket_send_tun: Sent to tun");
-                tun.send(&buf[..size]).await?;
-            }
-        }
-    }
-}
-
-impl Node {
-    async fn run(self) -> Result<(), Box<dyn Error>> {
         let Node {
             socket,
             tun,
@@ -325,27 +296,63 @@ impl Node {
             peers,
         } = self;
 
-        debug!("Node started");
+        let mut buf = [0u8; UDP_BUFFER_SIZE];
+    
+        loop {
+            let size = tun.recv(&mut buf).await?;
+    
+            debug!(
+                "receive_tun_send_socket: Received from tun {}/{} bytes from tun sent to: {}",
+                size, UDP_BUFFER_SIZE, peer
+            );
+            
+            show_hashmap(peers.clone());
+            
+            match Ipv4HeaderSlice::from_slice(&buf[..size]) {
+                Err(e) => {
+                    debug!("receive_tun_send_socket: Ignore Package with any problem in IPv4Header: {:?}", e);
+                }
+                Ok(value) => {
+                    let destination_addrs = IpAddr::V4(value.destination_addr());
+                    let source_addrs = IpAddr::V4(value.source_addr());
+                    debug!(
+                        "receive_tun_send_socket: source: {:?}, destination: {:?}",
+                        source_addrs, destination_addrs
+                    );
+                    match get_peer_from_hashmap(peers.clone(), destination_addrs) {
+                        Some(peer_addr) => {
+    
+                            let encrypted = encrypt(&key, &iv, &buf[..size]);
+                            let _ = socket.send_to(&encrypted[..], peer_addr.socket_addr).await;
+                            debug!("receive_tun_send_socket: : Sent to socket");
+                        }
+                        None => {
+                            debug!("receive_tun_send_socket: : Peer is not in hashmap");
+                        }
+                    }
+                }
+            }
+        }
+    }
 
-        // Clone udp socket
-        let socket_clone = socket.clone();
-        // Clone tun
-        let tun_arc = Arc::new(tun);
-        let tun_clone = tun_arc.clone();
-        // Clone peer
-        let peer_arc = Arc::new(peer);
-        let peers_clone = peers.clone();
+
+    async fn run(self) -> Result<(), Box<dyn Error>> {
+
+        debug!("Node started");
+        // Clone self for each thread, to use in tokio::select
+        let self_tun = self.clone();
+        let self_socket = self.clone();
 
         tokio::select! {
 
             res = tokio::spawn(async move {
                 // receive from tun and send to socket
-                let _ = receive_tun_send_socket(socket, tun_arc, &key, &iv, peer_arc, peers_clone ).await;
+                let _ = self_tun.receive_tun_send_socket().await;
             }) => { res.map_err(|e| e.into()) },
 
             res = tokio::spawn(async move {
                 // receive from socket and send to tun
-                let _ = receive_socket_send_tun(socket_clone, tun_clone, &key, &iv, peers).await;
+                let _ = self_socket.receive_socket_send_tun().await;
             }) => { res.map_err(|e| e.into()) },
 
             res = signal::ctrl_c() => {
