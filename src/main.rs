@@ -1,21 +1,21 @@
 use crate::codificar::*;
+use crate::route::*;
 use clap::{Parser, ValueEnum};
 use core::str;
 use env_logger::Builder;
 use etherparse::Ipv4HeaderSlice;
 use ipnet::Ipv4Net;
 use log::{debug, error, info, LevelFilter};
-use std::collections::HashMap;
 use std::error::Error;
 use std::iter::repeat;
-use std::net::Ipv4Addr;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{Ipv4Addr, IpAddr, SocketAddr};
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::signal;
 use tokio_tun::Tun;
 pub mod codificar;
+pub mod route;
 
 const UDP_BUFFER_SIZE: usize = 1024 * 200; // 17kb
 const DEFAULT_PORT: &str = "1714";
@@ -70,102 +70,6 @@ async fn create_tun(iface: &str, ipv4: &str, mtu: i32) -> Arc<tokio_tun::Tun> {
         .unwrap();
     info!("Tun interface created: {:?}, with IP {}", tun.name(), ipv4);
     return Arc::new(tun);
-}
-
-#[derive(Debug, Clone)]
-struct Peer {
-    socket_addr: SocketAddr,
-    key: [u8; MAX_KEY_SIZE],
-    iv: [u8; MAX_IV_SIZE],
-}
-
-#[derive(Debug, Clone)]
-struct Route {
-    peers: Arc<Mutex<HashMap<Ipv4Net, Arc<Peer>>>>,
-}
-
-impl Route {
-    fn new() -> Self {
-        Route {
-            peers: Arc::new(Mutex::new(HashMap::new())),
-        }
-    }
-    fn get_peer_from_hashmap(&self, destination_addrs: IpAddr) -> Option<Arc<Peer>> {
-
-        let peers = self.peers.lock().unwrap();
-        debug!(
-            "Get IP Address '{:?}' from HashMap (get_peer_from_hashmap)",
-            destination_addrs
-        );
-        let mut prefix = 0;
-        let mut peer_ret: Option<Arc<Peer>> = None;
-
-        for (k, v) in peers.iter() {
-            debug!(
-                "Element in HashMap: {:?} [{:?} {:?} {:?}]",
-                k, v.socket_addr, v.key, v.iv
-            );
-            let destination_addrs: Ipv4Addr = match destination_addrs {
-                IpAddr::V4(ip) => ip,
-                _ => return None,
-            };
-            if k.contains(&destination_addrs) {
-                debug!("Existing IP Address in HashMap (get_peer_from_hashmap)");
-                if prefix <= k.prefix_len() {
-                    prefix = k.prefix_len();
-                    peer_ret = Some(v.clone());
-                }
-            }
-        }
-        if let Some(peer_ret) = peer_ret {
-            return Some(peer_ret);
-        } else {
-            debug!("NO Existing IP Address in HashMap (get_peer_from_hashmap)");
-            return None;
-        }
-    }
-
-    // Work with the HashMap
-
-    fn show_hashmap(&self) {
-        let peers = self.peers.lock().unwrap();
-        for (k, v) in peers.iter() {
-            debug!(
-                "Element in HashMap: {:?} [{:?} {:?} {:?}]",
-                k, v.socket_addr, v.key, v.iv
-            );
-        }
-    }
-    fn add_net_to_hashmap(
-        &self,
-        peer: SocketAddr,
-        net: Ipv4Net,
-        key: [u8; MAX_KEY_SIZE],
-        iv: [u8; MAX_IV_SIZE],
-    ) {
-        let mut peers = self.peers.lock().unwrap();
-
-        // If peer is not in the hashmap, add it
-        debug!("Peer is in hashmap: {:?}", peers.contains_key(&net));
-        debug!("Adding or Update peer: {:?}", peer);
-        let insert_peer = Arc::new(Peer {
-            socket_addr: peer,
-            key,
-            iv,
-        });
-        peers.insert(net, insert_peer);
-    }
-
-    fn add_peer_to_hashmap(
-        &self,
-        peer: SocketAddr,
-        source_addrs: Ipv4Addr,
-        key: [u8; MAX_KEY_SIZE],
-        iv: [u8; MAX_IV_SIZE],
-    ) {
-        let peer_net = Ipv4Net::new(source_addrs, 32).unwrap();
-        self.add_net_to_hashmap(peer, peer_net, key, iv);
-    }
 }
 
 // Node
