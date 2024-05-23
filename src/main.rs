@@ -12,12 +12,11 @@ use std::sync::{Arc, Mutex};
 use tokio::net::UdpSocket;
 use tokio::signal;
 use tokio_tun::Tun;
-// use base64;
-use crypto;
 use rustc_serialize::hex::FromHex;
 use std::iter::repeat;
-use crypto::symmetriccipher::SynchronousStreamCipher;
 use core::str;
+use crate::codificar::{encrypt, decrypt};
+pub mod codificar;
 
 const UDP_BUFFER_SIZE: usize = 1024 * 200; // 17kb
 const DEFAULT_PORT: &str = "1714";
@@ -123,24 +122,6 @@ fn hex_to_bytes(s: &str) -> Vec<u8> {
             return repeat(0).take(0).collect();
         },
     };
-}
-
-fn encrypt (key: &[u8], iv: &[u8], msg: &[u8]) -> Vec<u8> {
-    let mut c = crypto::chacha20::ChaCha20::new(&key, iv);
-    let mut output: Vec<u8> = repeat(0).take(msg.len()).collect();
-    debug!("Encrypting message");
-    c.process(&msg[..], &mut output[..]);
-    return output;
-}
-
-
-fn decrypt (key: &[u8], iv: &[u8], msg: Vec<u8>, ret: &mut [u8]) {
-    let mut c = crypto::chacha20::ChaCha20::new(&key, iv);
-    let mut output = msg;
-    let mut newoutput: Vec<u8> = repeat(0).take(output.len()).collect();
-    debug!("Decrypting message");
-    c.process(&mut output[..], &mut newoutput[..]);
-    ret.copy_from_slice(&newoutput[..]);
 }
 
 // Peer
