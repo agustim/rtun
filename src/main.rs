@@ -1,10 +1,13 @@
+use crate::codificar::*;
 use clap::{Parser, ValueEnum};
+use core::str;
 use env_logger::Builder;
 use etherparse::Ipv4HeaderSlice;
 use ipnet::Ipv4Net;
 use log::{debug, error, info, LevelFilter};
 use std::collections::HashMap;
 use std::error::Error;
+use std::iter::repeat;
 use std::net::Ipv4Addr;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
@@ -12,9 +15,6 @@ use std::sync::{Arc, Mutex};
 use tokio::net::UdpSocket;
 use tokio::signal;
 use tokio_tun::Tun;
-use std::iter::repeat;
-use core::str;
-use crate::codificar::*;
 pub mod codificar;
 
 const UDP_BUFFER_SIZE: usize = 1024 * 200; // 17kb
@@ -22,8 +22,8 @@ const DEFAULT_PORT: &str = "1714";
 const DEFAULT_IFACE: &str = "rtun0";
 const DEFAULT_SERVER_ADDRESS: &str = "10.9.0.1/24";
 const DEFAULT_CLIENT_ADDRESS: &str = "10.9.0.2/24";
-const KEY : &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
-const IV : &str = "010203040506";
+const KEY: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+const IV: &str = "010203040506";
 
 #[derive(Parser)]
 #[command(version = "0.0.1", about, long_about = None)]
@@ -72,97 +72,121 @@ async fn create_tun(iface: &str, ipv4: &str, mtu: i32) -> Arc<tokio_tun::Tun> {
     return Arc::new(tun);
 }
 
-// Peer
+#[derive(Debug, Clone)]
 struct Peer {
     socket_addr: SocketAddr,
-    key: [u8;MAX_KEY_SIZE],
-    iv: [u8;MAX_IV_SIZE],
+    key: [u8; MAX_KEY_SIZE],
+    iv: [u8; MAX_IV_SIZE],
 }
 
-
-fn get_peer_from_hashmap(
+#[derive(Debug, Clone)]
+struct Route {
     peers: Arc<Mutex<HashMap<Ipv4Net, Arc<Peer>>>>,
-    destination_addrs: IpAddr,
-) -> Option<Arc<Peer>> {
-    let peers = peers.lock().unwrap();
-    debug!("Get IP Address '{:?}' from HashMap (get_peer_from_hashmap)", destination_addrs);
-    let mut prefix = 0;
-    let mut peer_ret: Option<Arc<Peer>> = None;
+}
 
-    for (k, v) in peers.iter() {
-        debug!("Element in HashMap: {:?} [{:?} {:?} {:?}]", k, v.socket_addr, v.key, v.iv);
-        let destination_addrs: Ipv4Addr = match destination_addrs {
-            IpAddr::V4(ip) => ip,
-            _ => return None,
-        };
-        if k.contains(&destination_addrs) {
-            debug!("Existing IP Address in HashMap (get_peer_from_hashmap)");
-            if prefix <= k.prefix_len() {
-                prefix = k.prefix_len();
-                peer_ret = Some(v.clone());
-            }
+impl Route {
+    fn new() -> Self {
+        Route {
+            peers: Arc::new(Mutex::new(HashMap::new())),
         }
     }
-    if let Some(peer_ret) = peer_ret {
-        return Some(peer_ret );
-    } else {
-        debug!("NO Existing IP Address in HashMap (get_peer_from_hashmap)");
-        return None;
+    fn get_peer_from_hashmap(&self, destination_addrs: IpAddr) -> Option<Arc<Peer>> {
+
+        let peers = self.peers.lock().unwrap();
+        debug!(
+            "Get IP Address '{:?}' from HashMap (get_peer_from_hashmap)",
+            destination_addrs
+        );
+        let mut prefix = 0;
+        let mut peer_ret: Option<Arc<Peer>> = None;
+
+        for (k, v) in peers.iter() {
+            debug!(
+                "Element in HashMap: {:?} [{:?} {:?} {:?}]",
+                k, v.socket_addr, v.key, v.iv
+            );
+            let destination_addrs: Ipv4Addr = match destination_addrs {
+                IpAddr::V4(ip) => ip,
+                _ => return None,
+            };
+            if k.contains(&destination_addrs) {
+                debug!("Existing IP Address in HashMap (get_peer_from_hashmap)");
+                if prefix <= k.prefix_len() {
+                    prefix = k.prefix_len();
+                    peer_ret = Some(v.clone());
+                }
+            }
+        }
+        if let Some(peer_ret) = peer_ret {
+            return Some(peer_ret);
+        } else {
+            debug!("NO Existing IP Address in HashMap (get_peer_from_hashmap)");
+            return None;
+        }
     }
-}
 
-// Work with the HashMap
+    // Work with the HashMap
 
-fn show_hashmap(peers: Arc<Mutex<HashMap<Ipv4Net, Arc<Peer>>>>) {
-    let peers = peers.lock().unwrap();
-    for (k, v) in peers.iter() {
-        debug!("Element in HashMap: {:?} [{:?} {:?} {:?}]", k, v.socket_addr, v.key, v.iv);
+    fn show_hashmap(&self) {
+        let peers = self.peers.lock().unwrap();
+        for (k, v) in peers.iter() {
+            debug!(
+                "Element in HashMap: {:?} [{:?} {:?} {:?}]",
+                k, v.socket_addr, v.key, v.iv
+            );
+        }
     }
-}
+    fn add_net_to_hashmap(
+        &self,
+        peer: SocketAddr,
+        net: Ipv4Net,
+        key: [u8; MAX_KEY_SIZE],
+        iv: [u8; MAX_IV_SIZE],
+    ) {
+        let mut peers = self.peers.lock().unwrap();
 
-fn add_peer_to_hashmap(
-    peers: Arc<Mutex<HashMap<Ipv4Net, Arc<Peer>>>>,
-    peer: SocketAddr,
-    source_addrs: Ipv4Addr,
-    key: [u8;MAX_KEY_SIZE],
-    iv: [u8;MAX_IV_SIZE],
-) {
-    let mut peers = peers.lock().unwrap();
+        // If peer is not in the hashmap, add it
+        debug!("Peer is in hashmap: {:?}", peers.contains_key(&net));
+        debug!("Adding or Update peer: {:?}", peer);
+        let insert_peer = Arc::new(Peer {
+            socket_addr: peer,
+            key,
+            iv,
+        });
+        peers.insert(net, insert_peer);
+    }
 
-    let peer_net = Ipv4Net::new(source_addrs, 32).unwrap();
-    // If peer is not in the hashmap, add it
-    debug!("Peer is in hashmap: {:?}", peers.contains_key(&peer_net));
-    debug!("Adding or Update peer: {:?}", peer);
-    let insert_peer = Arc::new(Peer {
-        socket_addr: peer,
-        key,
-        iv,
-    });
-    peers.insert(peer_net, insert_peer);
-
+    fn add_peer_to_hashmap(
+        &self,
+        peer: SocketAddr,
+        source_addrs: Ipv4Addr,
+        key: [u8; MAX_KEY_SIZE],
+        iv: [u8; MAX_IV_SIZE],
+    ) {
+        let peer_net = Ipv4Net::new(source_addrs, 32).unwrap();
+        self.add_net_to_hashmap(peer, peer_net, key, iv);
+    }
 }
 
 // Node
 struct Node {
     socket: Arc<UdpSocket>,
     tun: Arc<tokio_tun::Tun>,
-    key: [u8;MAX_KEY_SIZE],
-    iv: [u8;MAX_IV_SIZE],
+    key: [u8; MAX_KEY_SIZE],
+    iv: [u8; MAX_IV_SIZE],
     peer: SocketAddr,
-    peers: Arc<Mutex<HashMap<Ipv4Net, Arc<Peer>>>>,
+    route: Route,
 }
 
-
 impl Node {
-
-    fn clone (&self) -> Self {
+    fn clone(&self) -> Self {
         Node {
             socket: self.socket.clone(),
             tun: self.tun.clone(),
             key: self.key,
             iv: self.iv,
             peer: self.peer,
-            peers: self.peers.clone(),
+            route: self.route.clone(),
         }
     }
 
@@ -173,25 +197,25 @@ impl Node {
             key,
             iv,
             peer: _,
-            peers,
+            route,
         } = self;
 
         let mut buf_enc = [0u8; UDP_BUFFER_SIZE];
-    
+
         loop {
             let (size, peer) = socket.recv_from(&mut buf_enc).await?;
-    
+
             debug!(
                 "receive_socket_send_tun: Received from socket {}/{} bytes from tun sent to: {}",
                 size, UDP_BUFFER_SIZE, peer
             );
-    
+
             debug!("receive_socket_send_tun: size buffer_enc: {:?}", size);
             //let mut buf = [0u8; UDP_BUFFER_SIZE];
             let mut buf: Vec<u8> = repeat(0).take(size).collect();
             decrypt(&key, &iv, buf_enc[..size].to_vec(), &mut buf[..]);
             debug!("receive_socket_send_tun: size buffer_dec: {:?}", buf.len());
-    
+
             match Ipv4HeaderSlice::from_slice(&buf[..size]) {
                 Err(e) => {
                     error!("receive_socket_send_tun: Ignore Package with any problem in IPv4Header: {:?}", e);
@@ -203,9 +227,9 @@ impl Node {
                         "receive_socket_send_tun: {:?} => {:?}",
                         source_addrs, destination_addrs
                     );
-                    let key:[u8;MAX_KEY_SIZE] = key_to_array(&self.key).unwrap();
-                    let iv:[u8;MAX_IV_SIZE] = iv_to_array(&self.iv).unwrap();
-                    add_peer_to_hashmap(peers.clone(), peer, source_addrs, key, iv);
+                    let key: [u8; MAX_KEY_SIZE] = key_to_array(&self.key).unwrap();
+                    let iv: [u8; MAX_IV_SIZE] = iv_to_array(&self.iv).unwrap();
+                    route.add_peer_to_hashmap(peer, source_addrs, key, iv);
                     debug!("receive_socket_send_tun; size buffer: {:?}", size);
                     debug!("receive_socket_send_tun: Sent to tun");
                     tun.send(&buf[..size]).await?;
@@ -213,30 +237,29 @@ impl Node {
             }
         }
     }
-    
-    async fn receive_tun_send_socket(self) -> Result<(), Box<dyn Error + Send + Sync>> {
 
+    async fn receive_tun_send_socket(self) -> Result<(), Box<dyn Error + Send + Sync>> {
         let Node {
             socket,
             tun,
             key,
             iv,
             peer,
-            peers,
+            route,
         } = self;
 
         let mut buf = [0u8; UDP_BUFFER_SIZE];
-    
+
         loop {
             let size = tun.recv(&mut buf).await?;
-    
+
             debug!(
                 "receive_tun_send_socket: Received from tun {}/{} bytes from tun sent to: {}",
                 size, UDP_BUFFER_SIZE, peer
             );
-            
-            show_hashmap(peers.clone());
-            
+
+            route.show_hashmap();
+
             match Ipv4HeaderSlice::from_slice(&buf[..size]) {
                 Err(e) => {
                     debug!("receive_tun_send_socket: Ignore Package with any problem in IPv4Header: {:?}", e);
@@ -248,9 +271,8 @@ impl Node {
                         "receive_tun_send_socket: source: {:?}, destination: {:?}",
                         source_addrs, destination_addrs
                     );
-                    match get_peer_from_hashmap(peers.clone(), destination_addrs) {
+                    match route.get_peer_from_hashmap(destination_addrs) {
                         Some(peer_addr) => {
-    
                             let encrypted = encrypt(&key, &iv, &buf[..size]);
                             let _ = socket.send_to(&encrypted[..], peer_addr.socket_addr).await;
                             debug!("receive_tun_send_socket: : Sent to socket");
@@ -264,9 +286,7 @@ impl Node {
         }
     }
 
-
     async fn run(self) -> Result<(), Box<dyn Error>> {
-
         debug!("Node started");
         // Clone self for each thread, to use in tokio::select
         let self_tun = self.clone();
@@ -291,7 +311,13 @@ impl Node {
     }
 }
 
-async fn server_mode(port: u16, key: &[u8], iv: &[u8], iface: &str, address: &str) -> Result<(), Box<dyn Error>> {
+async fn server_mode(
+    port: u16,
+    key: &[u8],
+    iv: &[u8],
+    iface: &str,
+    address: &str,
+) -> Result<(), Box<dyn Error>> {
     let localhost_ip = IpAddr::from_str("0.0.0.0").unwrap();
     let server = SocketAddr::new(localhost_ip, port);
     let socket = UdpSocket::bind(server).await?;
@@ -300,8 +326,8 @@ async fn server_mode(port: u16, key: &[u8], iv: &[u8], iface: &str, address: &st
 
     debug!("key {:?}", key);
 
-    let key:[u8;MAX_KEY_SIZE] = key_to_array(key).unwrap();
-    let iv:[u8;MAX_IV_SIZE] = iv_to_array(iv).unwrap();
+    let key: [u8; MAX_KEY_SIZE] = key_to_array(key).unwrap();
+    let iv: [u8; MAX_IV_SIZE] = iv_to_array(iv).unwrap();
 
     let server = Node {
         socket: socket_arc,
@@ -309,36 +335,44 @@ async fn server_mode(port: u16, key: &[u8], iv: &[u8], iface: &str, address: &st
         key,
         iv,
         peer: SocketAddr::new(localhost_ip, 0),
-        peers: Arc::new(Mutex::new(HashMap::new())),
+        route: Route::new(),
     };
     server.run().await?;
 
     Ok(())
 }
 
-async fn client_mode(server_ip: &str, key: &[u8], iv: &[u8], port: u16, gateway_ip: &str, iface: &str, address: &str) -> Result<(), Box<dyn Error>> {
+async fn client_mode(
+    server_ip: &str,
+    key: &[u8],
+    iv: &[u8],
+    port: u16,
+    gateway_ip: &str,
+    iface: &str,
+    address: &str,
+) -> Result<(), Box<dyn Error>> {
     let remote_addr = IpAddr::from_str(server_ip).unwrap();
     let remote_server = SocketAddr::new(remote_addr, port);
 
-    let local_addr: SocketAddr = if remote_addr.is_ipv4() { "0.0.0.0:0" } else { "[::]:0"}.parse()?;
+    let local_addr: SocketAddr = if remote_addr.is_ipv4() {
+        "0.0.0.0:0"
+    } else {
+        "[::]:0"
+    }
+    .parse()?;
 
     let socket = UdpSocket::bind(local_addr).await?;
     socket.connect(remote_server).await?;
 
     let tun = create_tun(iface, address, 1500).await;
 
-    let key:[u8;MAX_KEY_SIZE] = key_to_array(key).unwrap();
-    let iv:[u8;MAX_IV_SIZE] = iv_to_array(iv).unwrap();
+    let key: [u8; MAX_KEY_SIZE] = key_to_array(key).unwrap();
+    let iv: [u8; MAX_IV_SIZE] = iv_to_array(iv).unwrap();
 
-    let mut peers: HashMap<Ipv4Net, Arc<Peer>> = HashMap::new();
+    let route: Route = Route::new();
     let remote_tun_server: Ipv4Addr = gateway_ip.parse().unwrap();
-    let insert_peer = Arc::new(Peer {
-        socket_addr: remote_server,
-        key,
-        iv,
-    });
     let remote_peer_net = Ipv4Net::new(remote_tun_server, 24).unwrap();
-    peers.insert(remote_peer_net, insert_peer);
+    route.add_net_to_hashmap(remote_server, remote_peer_net, key, iv);
 
     let socket_arc = Arc::new(socket);
     let socket_clone = socket_arc.clone();
@@ -349,7 +383,7 @@ async fn client_mode(server_ip: &str, key: &[u8], iv: &[u8], port: u16, gateway_
         key,
         iv,
         peer: remote_server,
-        peers: Arc::new(Mutex::new(peers)),
+        route,
     };
 
     client.run().await?;
@@ -359,7 +393,6 @@ async fn client_mode(server_ip: &str, key: &[u8], iv: &[u8], port: u16, gateway_
 
 #[tokio::main]
 async fn main() {
-    
     let cli = Cli::parse();
     Builder::new().filter(None, cli.log_level).init();
 
@@ -367,12 +400,23 @@ async fn main() {
     let iv = &hex_to_bytes(&cli.iv)[..];
     match cli.mode {
         Mode::Server => {
-            let address: String = if cli.address.is_empty() { DEFAULT_SERVER_ADDRESS.to_owned() } else { cli.address };
-            info!("Server dev({} - {}) in port {} started", cli.iface, address, cli.port);
+            let address: String = if cli.address.is_empty() {
+                DEFAULT_SERVER_ADDRESS.to_owned()
+            } else {
+                cli.address
+            };
+            info!(
+                "Server dev({} - {}) in port {} started",
+                cli.iface, address, cli.port
+            );
             let _ = server_mode(cli.port, key, iv, &cli.iface, &address).await;
         }
         Mode::Client => {
-            let address: String = if cli.address.is_empty() { DEFAULT_CLIENT_ADDRESS.to_owned() } else { cli.address };
+            let address: String = if cli.address.is_empty() {
+                DEFAULT_CLIENT_ADDRESS.to_owned()
+            } else {
+                cli.address
+            };
 
             if cli.host.is_empty() {
                 error!("host is required for client mode");
@@ -382,8 +426,20 @@ async fn main() {
                 error!("gateway is required for client mode");
                 std::process::exit(2);
             }
-            info!("Client dev({} - {}), connect to {}:{} gw {}", &cli.iface, &address, cli.host, cli.port, cli.gateway);
-            let _ = client_mode(&cli.host, key, iv, cli.port, &cli.gateway, &cli.iface, &address).await;
+            info!(
+                "Client dev({} - {}), connect to {}:{} gw {}",
+                &cli.iface, &address, cli.host, cli.port, cli.gateway
+            );
+            let _ = client_mode(
+                &cli.host,
+                key,
+                iv,
+                cli.port,
+                &cli.gateway,
+                &cli.iface,
+                &address,
+            )
+            .await;
         }
     }
 }
