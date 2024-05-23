@@ -94,7 +94,7 @@ impl Node {
         }
     }
 
-    async fn receive_socket_send_tun(self) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn receive_socket_send_tun(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
         let Node {
             socket,
             tun,
@@ -102,7 +102,7 @@ impl Node {
             iv,
             peer: _,
             route,
-        } = self;
+        } = self.clone();
 
         let mut buf_enc = [0u8; UDP_BUFFER_SIZE];
 
@@ -142,7 +142,7 @@ impl Node {
         }
     }
 
-    async fn receive_tun_send_socket(self) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn receive_tun_send_socket(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
         let Node {
             socket,
             tun,
@@ -150,7 +150,7 @@ impl Node {
             iv,
             peer,
             route,
-        } = self;
+        } = self.clone();
 
         let mut buf = [0u8; UDP_BUFFER_SIZE];
 
@@ -190,7 +190,7 @@ impl Node {
         }
     }
 
-    async fn run(self) -> Result<(), Box<dyn Error>> {
+    async fn run(&self) -> Result<(), Box<dyn Error>> {
         debug!("Node started");
         // Clone self for each thread, to use in tokio::select
         let self_tun = self.clone();
