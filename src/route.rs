@@ -1,9 +1,9 @@
-use std::collections::HashMap;
-use std::net::{Ipv4Addr, IpAddr, SocketAddr};
 use crate::codificar::*;
 use ipnet::Ipv4Net;
-use std::sync::{Arc, Mutex};
 use log::debug;
+use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone)]
 pub struct Peer {
@@ -24,7 +24,6 @@ impl Route {
         }
     }
     pub fn get_peer_from_hashmap(&self, destination_addrs: IpAddr) -> Option<Arc<Peer>> {
-
         let peers = self.peers.lock().unwrap();
         debug!(
             "Get IP Address '{:?}' from HashMap (get_peer_from_hashmap)",

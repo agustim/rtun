@@ -1,9 +1,7 @@
-
 use crypto::symmetriccipher::SynchronousStreamCipher;
-use log::{debug,error};
+use log::{debug, error};
 use rustc_serialize::hex::FromHex;
 use std::iter::repeat;
-
 
 pub const MAX_KEY_SIZE: usize = 32;
 pub const MAX_IV_SIZE: usize = 12;
@@ -69,6 +67,6 @@ pub fn hex_to_bytes(s: &str) -> Vec<u8> {
             error!("Error: {:?}, this string contains some different character to [0-9a-f]. Generate key with all zero.", e);
             //return vector with 0
             return repeat(0).take(0).collect();
-        },
+        }
     };
 }

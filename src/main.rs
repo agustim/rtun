@@ -6,7 +6,7 @@ use ipnet::Ipv4Net;
 use log::{debug, error, info, LevelFilter};
 use std::error::Error;
 use std::iter::repeat;
-use std::net::{Ipv4Addr, IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
@@ -18,8 +18,6 @@ use crate::route::*;
 pub mod route;
 use crate::device_tun::*;
 pub mod device_tun;
-
-
 
 const UDP_BUFFER_SIZE: usize = 1024 * 200; // 17kb
 const DEFAULT_PORT: &str = "1714";
@@ -57,8 +55,6 @@ enum Mode {
     Server,
     Client,
 }
-
-
 
 // Node
 struct Node {
