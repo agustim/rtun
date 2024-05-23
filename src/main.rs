@@ -12,10 +12,9 @@ use std::sync::{Arc, Mutex};
 use tokio::net::UdpSocket;
 use tokio::signal;
 use tokio_tun::Tun;
-use rustc_serialize::hex::FromHex;
 use std::iter::repeat;
 use core::str;
-use crate::codificar::{encrypt, decrypt};
+use crate::codificar::*;
 pub mod codificar;
 
 const UDP_BUFFER_SIZE: usize = 1024 * 200; // 17kb
@@ -23,8 +22,6 @@ const DEFAULT_PORT: &str = "1714";
 const DEFAULT_IFACE: &str = "rtun0";
 const DEFAULT_SERVER_ADDRESS: &str = "10.9.0.1/24";
 const DEFAULT_CLIENT_ADDRESS: &str = "10.9.0.2/24";
-const MAX_KEY_SIZE: usize = 32;
-const MAX_IV_SIZE: usize = 12;
 const KEY : &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 const IV : &str = "010203040506";
 
@@ -73,55 +70,6 @@ async fn create_tun(iface: &str, ipv4: &str, mtu: i32) -> Arc<tokio_tun::Tun> {
         .unwrap();
     info!("Tun interface created: {:?}, with IP {}", tun.name(), ipv4);
     return Arc::new(tun);
-}
-
-//Segur que hi ha una forma més correcte!!
-//Convert &[u8] to [u8;MAX_KEY_SIZE]
-fn key_to_array(key: &[u8]) -> Result<[u8;MAX_KEY_SIZE], &'static str> {
-    let mut key_array = [0u8;MAX_KEY_SIZE];
-    let key_len = key.len();
-
-    if key_len > MAX_KEY_SIZE {
-        return Err("Key size is too big");
-    }
-    for i in 0..key_len {
-        key_array[i] = key[i];
-    }
-    // Fill the rest with zero
-    for i in key_len..MAX_KEY_SIZE {
-        key_array[i] = 0;
-    }
-    return Ok(key_array);
-}
-//Convert &[u8] to [u8;MAX_IV_SIZE]
-fn iv_to_array(k: &[u8]) -> Result<[u8;MAX_IV_SIZE], &'static str> {
-    let mut ret_array = [0u8;MAX_IV_SIZE];
-    let k_len = k.len();
-
-    if k_len > MAX_IV_SIZE {
-        return Err("IV size is too big");
-    }
-    for i in 0..k_len {
-        ret_array[i] = k[i];
-    }
-    // Fill the rest with zero
-    for i in k_len..MAX_IV_SIZE {
-        ret_array[i] = 0;
-    }
-    return Ok(ret_array);
-}
-
-
-// Encrypt and Decrypt functions
-fn hex_to_bytes(s: &str) -> Vec<u8> {
-    match s.from_hex() {
-        Ok(r) => return r,
-        Err(e) => {
-            error!("Error: {:?}, this string contains some different character to [0-9a-f]. Generate key with all zero.", e);
-            //return vector with 0
-            return repeat(0).take(0).collect();
-        },
-    };
 }
 
 // Peer
