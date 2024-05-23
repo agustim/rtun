@@ -1,5 +1,3 @@
-use crate::codificar::*;
-use crate::route::*;
 use clap::{Parser, ValueEnum};
 use core::str;
 use env_logger::Builder;
@@ -13,9 +11,15 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::signal;
-use tokio_tun::Tun;
+
+use crate::codificar::*;
 pub mod codificar;
+use crate::route::*;
 pub mod route;
+use crate::device_tun::*;
+pub mod device_tun;
+
+
 
 const UDP_BUFFER_SIZE: usize = 1024 * 200; // 17kb
 const DEFAULT_PORT: &str = "1714";
@@ -54,23 +58,7 @@ enum Mode {
     Client,
 }
 
-async fn create_tun(iface: &str, ipv4: &str, mtu: i32) -> Arc<tokio_tun::Tun> {
-    let net: Ipv4Net = ipv4.parse().unwrap();
 
-    let tun = Tun::builder()
-        .name(iface)
-        .tap(false)
-        .packet_info(false)
-        .mtu(mtu)
-        .up()
-        .address(net.addr())
-        .broadcast(Ipv4Addr::BROADCAST)
-        .netmask(net.netmask())
-        .try_build()
-        .unwrap();
-    info!("Tun interface created: {:?}, with IP {}", tun.name(), ipv4);
-    return Arc::new(tun);
-}
 
 // Node
 struct Node {
@@ -226,7 +214,7 @@ async fn server_mode(
     let server = SocketAddr::new(localhost_ip, port);
     let socket = UdpSocket::bind(server).await?;
     let socket_arc = Arc::new(socket);
-    let tun = create_tun(iface, &address, 1500).await;
+    let tun = create_tun(iface, &address, 1500).await?;
 
     debug!("key {:?}", key);
 
@@ -268,7 +256,7 @@ async fn client_mode(
     let socket = UdpSocket::bind(local_addr).await?;
     socket.connect(remote_server).await?;
 
-    let tun = create_tun(iface, address, 1500).await;
+    let tun = create_tun(iface, address, 1500).await?;
 
     let key: [u8; MAX_KEY_SIZE] = key_to_array(key).unwrap();
     let iv: [u8; MAX_IV_SIZE] = iv_to_array(iv).unwrap();
